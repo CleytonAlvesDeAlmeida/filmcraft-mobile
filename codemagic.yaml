@@ -1,155 +1,23 @@
-# Codemagic: https://docs.codemagic.io/yaml-quick-start/building-a-native-android-app/
-#
-# Dois workflows:
-#   android-debug   -> APK de debug (instalável direto, sem assinatura). Use este primeiro.
-#   android-release -> AAB assinado para a Google Play (precisa de keystore no Codemagic).
-#
-# Ambos compilam o núcleo Rust (cargo-ndk) antes do Gradle.
-# Sem `instance_type`, o Codemagic usa a máquina padrão do seu plano (no plano gratuito, macOS M2).
+#!/usr/bin/env bash
+# Gera o Gradle Wrapper (gradlew + gradle-wrapper.jar) sem versionar o .jar binário.
+# Roda num diretório temporário para funcionar com qualquer Gradle instalado na máquina.
+set -euo pipefail
 
-definitions:
-  # Passos compartilhados pelos dois workflows (âncoras YAML).
-  scripts:
-    - &instalar_rust
-      name: Instalar Rust, alvos Android e cargo-ndk
-      script: |
-        set -euo pipefail
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-        . "$HOME/.cargo/env"
-        rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-        cargo install cargo-ndk --locked
-        rustc --version
-    - &instalar_ndk
-      name: Localizar ou instalar Android NDK
-      script: |
-        set -euo pipefail
-        # 1) Acha o SDK do Android
-        SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-        if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
-          for d in "$HOME/Library/Android/sdk" "$HOME/programs/android-sdk-macosx" "/usr/local/share/android-sdk" "/opt/android-sdk"; do
-            if [ -d "$d" ]; then SDK="$d"; break; fi
-          done
-        fi
-        echo "SDK: ${SDK:-<nao encontrado>}"
-        [ -d "$SDK" ] || { echo "ERRO: SDK do Android nao encontrado"; exit 1; }
-        ls "$SDK" || true
-        ls "$SDK/ndk" 2>/dev/null || echo "(sem NDK pre-instalado)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(tr -d '[:space:]' < "$ROOT/gradle/wrapper-version.txt")"
 
-        # 2) Usa um NDK ja instalado, se houver
-        NDK_DIR=""
-        if [ -d "$SDK/ndk" ]; then
-          NDK_DIR="$(ls -d "$SDK"/ndk/*/ 2>/dev/null | sort -V | tail -1 || true)"
-          NDK_DIR="${NDK_DIR%/}"
-        fi
+if [ -x "$ROOT/gradlew" ] && [ -f "$ROOT/gradle/wrapper/gradle-wrapper.jar" ]; then
+  echo "Gradle Wrapper já existe."
+  exit 0
+fi
 
-        # 3) Senao, instala com o sdkmanager (mesmo fora do PATH)
-        if [ -z "$NDK_DIR" ]; then
-          SDKM="$(command -v sdkmanager || true)"
-          if [ -z "$SDKM" ]; then
-            for c in "$SDK"/cmdline-tools/latest/bin/sdkmanager "$SDK"/cmdline-tools/*/bin/sdkmanager "$SDK"/tools/bin/sdkmanager; do
-              if [ -x "$c" ]; then SDKM="$c"; break; fi
-            done
-          fi
-          if [ -z "$SDKM" ]; then
-            echo "ERRO: sdkmanager nao encontrado. Conteudo do SDK:"
-            find "$SDK" -maxdepth 3 -name 'sdkmanager*' || true
-            exit 1
-          fi
-          yes | "$SDKM" --sdk_root="$SDK" --licenses >/dev/null 2>&1 || true
-          "$SDKM" --sdk_root="$SDK" "ndk;27.2.12479018"
-          NDK_DIR="$SDK/ndk/27.2.12479018"
-        fi
-
-        echo "NDK: $NDK_DIR"
-        echo "ANDROID_SDK_ROOT=$SDK" >> "$CM_ENV"
-        echo "ANDROID_HOME=$SDK" >> "$CM_ENV"
-        echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$CM_ENV"
-    - &testar_rust
-      name: Testar núcleo Rust
-      script: |
-        set -euo pipefail
-        . "$HOME/.cargo/env"
-        cd rust
-        cargo test
-    - &compilar_rust
-      name: Compilar núcleo Rust para Android
-      script: |
-        set -euo pipefail
-        . "$HOME/.cargo/env"
-        bash ./scripts/build-rust.sh release
-    - &gerar_wrapper
-      name: Gerar Gradle Wrapper
-      script: |
-        command -v gradle >/dev/null 2>&1 || brew install gradle
-        bash ./scripts/ensure-gradle-wrapper.sh
-    - &local_properties
-      name: Configurar local.properties
-      script: |
-        echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" > "$CM_BUILD_DIR/local.properties"
-
-workflows:
-  android-debug:
-    name: Android Debug (APK)
-    max_build_duration: 60
-    environment:
-      java: 17
-    cache:
-      cache_paths:
-        - $HOME/.gradle/caches
-        - $HOME/.cargo/registry
-        - $HOME/.cargo/git
-        - $CM_BUILD_DIR/rust/target
-    scripts:
-      - *instalar_rust
-      - *instalar_ndk
-      - *testar_rust
-      - *compilar_rust
-      - *gerar_wrapper
-      - *local_properties
-      - name: Compilar APK de debug
-        script: ./gradlew :app:assembleDebug
-    artifacts:
-      - app/build/outputs/**/*.apk
-    publishing:
-      email:
-        recipients:
-          - seu-email@exemplo.com   # TROQUE pelo seu e-mail
-        notify:
-          success: true
-          failure: true
-
-  android-release:
-    name: Android Release (AAB assinado)
-    max_build_duration: 60
-    environment:
-      java: 17
-      # 1) Codemagic > Teams > Code signing identities > Android keystores: envie o .jks
-      # 2) Dê a ele o nome abaixo (ou troque aqui):
-      android_signing:
-        - filmcraft_keystore
-    cache:
-      cache_paths:
-        - $HOME/.gradle/caches
-        - $HOME/.cargo/registry
-        - $HOME/.cargo/git
-        - $CM_BUILD_DIR/rust/target
-    scripts:
-      - *instalar_rust
-      - *instalar_ndk
-      - *testar_rust
-      - *compilar_rust
-      - *gerar_wrapper
-      - *local_properties
-      - name: Compilar AAB e APK de release
-        script: |
-          ./gradlew :app:bundleRelease :app:assembleRelease
-    artifacts:
-      - app/build/outputs/**/*.aab
-      - app/build/outputs/**/*.apk
-    publishing:
-      email:
-        recipients:
-          - seu-email@exemplo.com   # TROQUE pelo seu e-mail
-        notify:
-          success: true
-          failure: true
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+# O Gradle 8.x exige um settings file mesmo para o task "wrapper".
+: > "$TMP/settings.gradle"
+( cd "$TMP" && gradle wrapper --gradle-version "$VERSION" --distribution-type bin )
+mkdir -p "$ROOT/gradle/wrapper"
+cp "$TMP/gradlew" "$TMP/gradlew.bat" "$ROOT/"
+cp "$TMP/gradle/wrapper/gradle-wrapper.jar" "$TMP/gradle/wrapper/gradle-wrapper.properties" "$ROOT/gradle/wrapper/"
+chmod +x "$ROOT/gradlew"
+echo "Gradle Wrapper $VERSION criado."
