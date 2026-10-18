@@ -5,6 +5,7 @@
 #   android-release -> AAB assinado para a Google Play (precisa de keystore no Codemagic).
 #
 # Ambos compilam o núcleo Rust (cargo-ndk) antes do Gradle.
+# Sem `instance_type`, o Codemagic usa a máquina padrão do seu plano (no plano gratuito, macOS M2).
 
 definitions:
   # Passos compartilhados pelos dois workflows (âncoras YAML).
@@ -52,7 +53,6 @@ definitions:
 workflows:
   android-debug:
     name: Android Debug (APK)
-    instance_type: linux_x2
     max_build_duration: 60
     environment:
       java: 17
@@ -83,7 +83,6 @@ workflows:
 
   android-release:
     name: Android Release (AAB assinado)
-    instance_type: linux_x2
     max_build_duration: 60
     environment:
       java: 17
