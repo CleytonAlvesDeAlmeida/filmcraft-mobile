@@ -20,14 +20,50 @@ definitions:
         cargo install cargo-ndk --locked
         rustc --version
     - &instalar_ndk
-      name: Instalar Android NDK
+      name: Localizar ou instalar Android NDK
       script: |
         set -euo pipefail
+        # 1) Acha o SDK do Android
         SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-        NDK_VERSION="27.2.12479018"
-        yes | sdkmanager --licenses >/dev/null 2>&1 || true
-        sdkmanager "ndk;${NDK_VERSION}"
-        echo "ANDROID_NDK_HOME=$SDK/ndk/${NDK_VERSION}" >> "$CM_ENV"
+        if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+          for d in "$HOME/Library/Android/sdk" "$HOME/programs/android-sdk-macosx" "/usr/local/share/android-sdk" "/opt/android-sdk"; do
+            if [ -d "$d" ]; then SDK="$d"; break; fi
+          done
+        fi
+        echo "SDK: ${SDK:-<nao encontrado>}"
+        [ -d "$SDK" ] || { echo "ERRO: SDK do Android nao encontrado"; exit 1; }
+        ls "$SDK" || true
+        ls "$SDK/ndk" 2>/dev/null || echo "(sem NDK pre-instalado)"
+
+        # 2) Usa um NDK ja instalado, se houver
+        NDK_DIR=""
+        if [ -d "$SDK/ndk" ]; then
+          NDK_DIR="$(ls -d "$SDK"/ndk/*/ 2>/dev/null | sort -V | tail -1 || true)"
+          NDK_DIR="${NDK_DIR%/}"
+        fi
+
+        # 3) Senao, instala com o sdkmanager (mesmo fora do PATH)
+        if [ -z "$NDK_DIR" ]; then
+          SDKM="$(command -v sdkmanager || true)"
+          if [ -z "$SDKM" ]; then
+            for c in "$SDK"/cmdline-tools/latest/bin/sdkmanager "$SDK"/cmdline-tools/*/bin/sdkmanager "$SDK"/tools/bin/sdkmanager; do
+              if [ -x "$c" ]; then SDKM="$c"; break; fi
+            done
+          fi
+          if [ -z "$SDKM" ]; then
+            echo "ERRO: sdkmanager nao encontrado. Conteudo do SDK:"
+            find "$SDK" -maxdepth 3 -name 'sdkmanager*' || true
+            exit 1
+          fi
+          yes | "$SDKM" --sdk_root="$SDK" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --sdk_root="$SDK" "ndk;27.2.12479018"
+          NDK_DIR="$SDK/ndk/27.2.12479018"
+        fi
+
+        echo "NDK: $NDK_DIR"
+        echo "ANDROID_SDK_ROOT=$SDK" >> "$CM_ENV"
+        echo "ANDROID_HOME=$SDK" >> "$CM_ENV"
+        echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$CM_ENV"
     - &testar_rust
       name: Testar núcleo Rust
       script: |
@@ -44,6 +80,7 @@ definitions:
     - &gerar_wrapper
       name: Gerar Gradle Wrapper
       script: |
+        command -v gradle >/dev/null 2>&1 || brew install gradle
         bash ./scripts/ensure-gradle-wrapper.sh
     - &local_properties
       name: Configurar local.properties
