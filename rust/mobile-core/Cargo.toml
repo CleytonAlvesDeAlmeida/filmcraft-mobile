@@ -1,0 +1,19 @@
+[package]
+name = "filmcraft-mobile-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Núcleo de edição do FilmCraft Mobile: modelo de linha do tempo em tempo exato (ticks) exposto ao Android via JNI"
+
+[lib]
+name = "filmcraft_mobile"
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+# Tempo exato do FilmCraft (254.016.000.000 ticks/s): quadros, timecode e arredondamento sem deriva.
+# Fixado num commit para a build ser reprodutível; atualize o `rev` quando quiser acompanhar o FilmCraft.
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "48088e3a8e50bd4a7a71d1ebdfde0835b01a3051" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jni = "0.21"

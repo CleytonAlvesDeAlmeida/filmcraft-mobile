@@ -1,0 +1,119 @@
+# Codemagic: https://docs.codemagic.io/yaml-quick-start/building-a-native-android-app/
+#
+# Dois workflows:
+#   android-debug   -> APK de debug (instalável direto, sem assinatura). Use este primeiro.
+#   android-release -> AAB assinado para a Google Play (precisa de keystore no Codemagic).
+#
+# Ambos compilam o núcleo Rust (cargo-ndk) antes do Gradle.
+
+definitions:
+  # Passos compartilhados pelos dois workflows (âncoras YAML).
+  scripts:
+    - &instalar_rust
+      name: Instalar Rust, alvos Android e cargo-ndk
+      script: |
+        set -euo pipefail
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+        . "$HOME/.cargo/env"
+        rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+        cargo install cargo-ndk --locked
+        rustc --version
+    - &instalar_ndk
+      name: Instalar Android NDK
+      script: |
+        set -euo pipefail
+        SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+        NDK_VERSION="27.2.12479018"
+        yes | sdkmanager --licenses >/dev/null 2>&1 || true
+        sdkmanager "ndk;${NDK_VERSION}"
+        echo "ANDROID_NDK_HOME=$SDK/ndk/${NDK_VERSION}" >> "$CM_ENV"
+    - &testar_rust
+      name: Testar núcleo Rust
+      script: |
+        set -euo pipefail
+        . "$HOME/.cargo/env"
+        cd rust
+        cargo test
+    - &compilar_rust
+      name: Compilar núcleo Rust para Android
+      script: |
+        set -euo pipefail
+        . "$HOME/.cargo/env"
+        bash ./scripts/build-rust.sh release
+    - &gerar_wrapper
+      name: Gerar Gradle Wrapper
+      script: |
+        bash ./scripts/ensure-gradle-wrapper.sh
+    - &local_properties
+      name: Configurar local.properties
+      script: |
+        echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" > "$CM_BUILD_DIR/local.properties"
+
+workflows:
+  android-debug:
+    name: Android Debug (APK)
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      java: 17
+    cache:
+      cache_paths:
+        - $HOME/.gradle/caches
+        - $HOME/.cargo/registry
+        - $HOME/.cargo/git
+        - $CM_BUILD_DIR/rust/target
+    scripts:
+      - *instalar_rust
+      - *instalar_ndk
+      - *testar_rust
+      - *compilar_rust
+      - *gerar_wrapper
+      - *local_properties
+      - name: Compilar APK de debug
+        script: ./gradlew :app:assembleDebug
+    artifacts:
+      - app/build/outputs/**/*.apk
+    publishing:
+      email:
+        recipients:
+          - seu-email@exemplo.com   # TROQUE pelo seu e-mail
+        notify:
+          success: true
+          failure: true
+
+  android-release:
+    name: Android Release (AAB assinado)
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      java: 17
+      # 1) Codemagic > Teams > Code signing identities > Android keystores: envie o .jks
+      # 2) Dê a ele o nome abaixo (ou troque aqui):
+      android_signing:
+        - filmcraft_keystore
+    cache:
+      cache_paths:
+        - $HOME/.gradle/caches
+        - $HOME/.cargo/registry
+        - $HOME/.cargo/git
+        - $CM_BUILD_DIR/rust/target
+    scripts:
+      - *instalar_rust
+      - *instalar_ndk
+      - *testar_rust
+      - *compilar_rust
+      - *gerar_wrapper
+      - *local_properties
+      - name: Compilar AAB e APK de release
+        script: |
+          ./gradlew :app:bundleRelease :app:assembleRelease
+    artifacts:
+      - app/build/outputs/**/*.aab
+      - app/build/outputs/**/*.apk
+    publishing:
+      email:
+        recipients:
+          - seu-email@exemplo.com   # TROQUE pelo seu e-mail
+        notify:
+          success: true
+          failure: true
